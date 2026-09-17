@@ -23,17 +23,27 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate Android build files
+      - name: Generate Fresh Flutter App with Full Android Scaffolding
         run: |
-          flutter create --org com.example --project-name ai_video_maker temp_app
-          cp -r temp_app/android/build.gradle temp_app/android/gradle* temp_app/android/settings.gradle android/ 2>/dev/null || true
-          cp -r temp_app/android/app/build.gradle android/app/ 2>/dev/null || true
-          rm -rf temp_app
+          # Backup user lib/main.dart
+          cp lib/main.dart /tmp/saved_main.dart
+          
+          # Remove manually created partial folders to avoid conflicts
+          rm -rf android pubspec.yaml
+          
+          # Auto-generate modern Flutter project with proper v2 embedding
+          flutter create --org com.example --project-name ai_video_maker .
+          
+          # Restore user code
+          cp /tmp/saved_main.dart lib/main.dart
+          
+          # Add internet permission to generated AndroidManifest
+          sed -i '/<application/i <uses-permission android:name="android.permission.INTERNET"/>\n<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>' android/app/src/main/AndroidManifest.xml
+          
+          # Add required dependencies automatically
+          flutter pub add http image_picker video_player chewie path_provider
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK
+      - name: Build Standalone APK
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Upload APK Artifact
