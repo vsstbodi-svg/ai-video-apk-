@@ -1,0 +1,20 @@
+name: ai_video_maker
+description: AI Video Generator App
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  image_picker: ^1.0.7
+  video_player: ^2.8.2
+  chewie: ^1.7.5
+  path_provider: ^2.1.2
+
+flutter:
+  uses-material-design: true
+  
