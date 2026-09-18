@@ -27,45 +27,16 @@ FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 @app.get("/")
 def health():
-    return {"status": "ok", "message": "Cinematic AI Video Backend Live"}
+    return {"status": "ok", "message": "High-Speed AI Video Backend Live"}
 
 def get_audio_duration(audio_file: str) -> float:
-    cmd = [
-        FFMPEG_EXE, "-i", audio_file
-    ]
+    cmd = [FFMPEG_EXE, "-i", audio_file]
     res = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     matches = re.findall(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", res.stderr)
     if matches:
         h, m, s = matches[0]
         return float(h) * 3600 + float(m) * 60 + float(s)
-    return 10.0
-
-def split_into_scenes(text: str, max_scenes: int = 4):
-    """Splits script into distinct narrative scenes."""
-    sentences = [s.strip() for s in re.split(r'[.!?\n]+', text) if len(s.strip()) > 5]
-    if not sentences:
-        return [text]
-    if len(sentences) <= max_scenes:
-        return sentences
-    step = len(sentences) / max_scenes
-    scenes = []
-    for i in range(max_scenes):
-        start = int(i * step)
-        end = int((i + 1) * step) if i < max_scenes - 1 else len(sentences)
-        chunk = ". ".join(sentences[start:end])
-        if chunk:
-            scenes.append(chunk)
-    return scenes
-
-def generate_ai_scene_image(prompt_text: str, scene_idx: int, output_path: str):
-    """Generates 8K cinematic background matching the scene content."""
-    clean_prompt = re.sub(r'[^a-zA-Z0-9\s]', ' ', prompt_text)[:120]
-    full_prompt = f"cinematic 3d animation, {clean_prompt}, colorful detailed environment, vibrant unreal engine 5, 8k vertical concept art"
-    encoded = urllib.parse.quote(full_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=720&height=1280&nologo=true&seed={scene_idx + int(time.time())}"
-    resp = requests.get(url, timeout=25)
-    with open(output_path, "wb") as f:
-        f.write(resp.content)
+    return 8.0
 
 @app.post("/generate")
 async def generate_video(
@@ -84,85 +55,59 @@ async def generate_video(
         os.makedirs(run_dir, exist_ok=True)
 
         avatar_path = os.path.join(run_dir, "avatar.png")
-        full_audio_path = os.path.join(run_dir, "full_audio.mp3")
+        bg_path = os.path.join(run_dir, "bg.png")
+        audio_path = os.path.join(run_dir, "audio.mp3")
         final_video_path = os.path.join(run_dir, "final_video.mp4")
 
-        # 1. Source Avatar
+        # 1. Avatar Source
         if image_mode == "upload" and user_image:
             with open(avatar_path, "wb") as f:
                 f.write(await user_image.read())
         elif stock_image_url:
-            resp = requests.get(stock_image_url, timeout=15)
+            resp = requests.get(stock_image_url, timeout=10)
             with open(avatar_path, "wb") as f:
                 f.write(resp.content)
         else:
             default_url = "https://cdn.pixabay.com/photo/2016/08/20/05/38/avatar-1606916_1280.png"
-            resp = requests.get(default_url, timeout=15)
+            resp = requests.get(default_url, timeout=10)
             with open(avatar_path, "wb") as f:
                 f.write(resp.content)
 
-        # 2. Generate Narration Audio
+        # 2. Fast Speech Synthesis (Edge-TTS)
         text = script.strip() if (script and script.strip()) else "வணக்கம்"
         if user_audio:
-            with open(full_audio_path, "wb") as f:
+            with open(audio_path, "wb") as f:
                 f.write(await user_audio.read())
         else:
             clean_text = text.replace('"', '\\"').replace("'", "")
-            tts_cmd = f'edge-tts --voice {voice} --text "{clean_text}" --write-media "{full_audio_path}"'
+            tts_cmd = f'edge-tts --voice {voice} --text "{clean_text}" --write-media "{audio_path}"'
             subprocess.run(tts_cmd, shell=True, check=True)
 
-        total_duration = get_audio_duration(full_audio_path)
+        # 3. Generate 1 Relevant Scene Background via Pollinations (Fast)
+        bg_prompt = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)[:90].strip()
+        if not bg_prompt:
+            bg_prompt = "cinematic colorful temple landscape digital art"
+        encoded = urllib.parse.quote(f"{bg_prompt}, cinematic landscape, vertical, 4k concept art")
+        poll_url = f"https://image.pollinations.ai/prompt/{encoded}?width=720&height=1280&nologo=true"
+        
+        try:
+            r = requests.get(poll_url, timeout=12)
+            if r.status_code == 200 and len(r.content) > 5000:
+                with open(bg_path, "wb") as f:
+                    f.write(r.content)
+            else:
+                shutil.copy(avatar_path, bg_path)
+        except Exception:
+            shutil.copy(avatar_path, bg_path)
 
-        # 3. Create Scene Backgrounds
-        scenes = split_into_scenes(text, max_scenes=4)
-        scene_duration = total_duration / len(scenes)
-        scene_video_files = []
-
-        w, h = (720, 1280) if aspect_ratio == "9:16" else (1280, 720)
-
-        for i, sc_text in enumerate(scenes):
-            bg_img = os.path.join(run_dir, f"bg_{i}.png")
-            sc_clip = os.path.join(run_dir, f"clip_{i}.mp4")
-
-            try:
-                generate_ai_scene_image(sc_text, i, bg_img)
-            except Exception:
-                shutil.copy(avatar_path, bg_img)
-
-            # Ken Burns cinematic slow pan/zoom effect
-            bg_cmd = [
-                FFMPEG_EXE, "-y",
-                "-loop", "1", "-t", str(scene_duration),
-                "-i", bg_img,
-                "-vf", f"scale=1080:1920,zoompan=z='min(zoom+0.0015,1.2)':d={int(scene_duration*25)}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h},format=yuv420p",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-r", "25",
-                sc_clip
-            ]
-            subprocess.run(bg_cmd, check=True)
-            scene_video_files.append(sc_clip)
-
-        # Concatenate background scene clips
-        concat_txt = os.path.join(run_dir, "concat.txt")
-        with open(concat_txt, "w") as f:
-            for sc in scene_video_files:
-                f.write(f"file '{sc}'\n")
-
-        bg_stitched = os.path.join(run_dir, "bg_stitched.mp4")
-        subprocess.run([
-            FFMPEG_EXE, "-y", "-f", "concat", "-safe", "0",
-            "-i", concat_txt, "-c", "copy", bg_stitched
-        ], check=True)
-
-        # 4. Generate Talking Avatar via Lip-Sync
-        talking_avatar = os.path.join(run_dir, "avatar_talk.mp4")
-        lip_synced = False
+        # 4. Optional Remote Lip-Sync (with tight 15s budget)
+        talking_avatar = os.path.join(run_dir, "talking.mp4")
+        has_lip_sync = False
         try:
             client = Client("John6666/SadTalker")
             job = client.submit(
                 source_image=handle_file(avatar_path),
-                driven_audio=handle_file(full_audio_path),
+                driven_audio=handle_file(audio_path),
                 preprocess="crop",
                 still_mode=True,
                 use_enhancer=False,
@@ -180,46 +125,55 @@ async def generate_video(
                 result_dir="./results",
                 api_name="/test"
             )
-            raw_result = job.result(timeout=75)
-            res_file = raw_result[0] if isinstance(raw_result, (list, tuple)) else raw_result
+            raw = job.result(timeout=15)
+            res_file = raw[0] if isinstance(raw, (list, tuple)) else raw
             if res_file and os.path.exists(res_file):
                 shutil.copy(res_file, talking_avatar)
-                lip_synced = True
+                has_lip_sync = True
         except Exception:
-            lip_synced = False
+            has_lip_sync = False
 
-        # 5. Composite Background + Picture-in-Picture Presenter + Audio
-        if lip_synced:
-            # Overlay lip-synced presenter in lower right circle
-            overlay_cmd = [
+        # 5. Fast Ultrafast FFmpeg Assembly
+        w, h = (720, 1280) if aspect_ratio == "9:16" else (1280, 720)
+
+        if has_lip_sync:
+            # Composite background with the talking presenter
+            cmd = [
                 FFMPEG_EXE, "-y",
-                "-i", bg_stitched,
+                "-loop", "1", "-i", bg_path,
                 "-i", talking_avatar,
                 "-filter_complex",
-                "[1:v]scale=260:260,format=yuva420p[pip];[0:v][pip]overlay=W-w-30:H-h-50",
+                f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[bg];"
+                f"[1:v]scale=280:280[avatar];"
+                f"[bg][avatar]overlay=W-w-30:H-h-50",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-c:a", "aac",
-                "-b:a", "128k",
+                "-c:a", "copy",
                 "-shortest",
                 final_video_path
             ]
-            subprocess.run(overlay_cmd, check=True)
         else:
-            # Direct merge background with voice audio
-            merge_cmd = [
+            # High-speed static animated picture-in-picture
+            cmd = [
                 FFMPEG_EXE, "-y",
-                "-i", bg_stitched,
-                "-i", full_audio_path,
-                "-c:v", "copy",
+                "-loop", "1", "-i", bg_path,
+                "-loop", "1", "-i", avatar_path,
+                "-i", audio_path,
+                "-filter_complex",
+                f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[bg];"
+                f"[1:v]scale=260:260[avatar];"
+                f"[bg][avatar]overlay=W-w-30:H-h-50",
+                "-c:v", "libx264",
+                "-tune", "stillimage",
+                "-preset", "ultrafast",
                 "-c:a", "aac",
-                "-b:a", "128k",
+                "-b:a", "96k",
                 "-shortest",
                 final_video_path
             ]
-            subprocess.run(merge_cmd, check=True)
 
-        return FileResponse(final_video_path, media_type="video/mp4", filename="cinematic_ai_video.mp4")
+        subprocess.run(cmd, check=True)
+        return FileResponse(final_video_path, media_type="video/mp4", filename="ai_video.mp4")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
