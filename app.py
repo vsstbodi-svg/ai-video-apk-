@@ -1,8 +1,7 @@
 import os
+import gc
 import re
 import time
-import shutil
-import urllib.parse
 import subprocess
 import requests
 import imageio_ffmpeg
@@ -40,16 +39,13 @@ async def generate_video(
     user_audio: UploadFile = File(None)
 ):
     try:
+        # Clean workspace to prevent RAM/disk buildup
         req_id = int(time.time() * 1000)
-        run_dir = os.path.join(WORKSPACE, f"run_{req_id}")
-        os.makedirs(run_dir, exist_ok=True)
+        avatar_path = os.path.join(WORKSPACE, f"av_{req_id}.png")
+        audio_path = os.path.join(WORKSPACE, f"au_{req_id}.mp3")
+        final_video_path = os.path.join(WORKSPACE, f"out_{req_id}.mp4")
 
-        avatar_path = os.path.join(run_dir, "avatar.png")
-        bg_path = os.path.join(run_dir, "bg.png")
-        audio_path = os.path.join(run_dir, "audio.mp3")
-        final_video_path = os.path.join(run_dir, "final_video.mp4")
-
-        # 1. Avatar Handling
+        # 1. Avatar Source
         if image_mode == "upload" and user_image:
             with open(avatar_path, "wb") as f:
                 f.write(await user_image.read())
@@ -60,14 +56,13 @@ async def generate_video(
                     f.write(resp.content)
             except Exception:
                 pass
-        
-        # Fallback placeholder if avatar download fails
+
         if not os.path.exists(avatar_path) or os.path.getsize(avatar_path) == 0:
             resp = requests.get("https://cdn.pixabay.com/photo/2016/08/20/05/38/avatar-1606916_1280.png", timeout=5)
             with open(avatar_path, "wb") as f:
                 f.write(resp.content)
 
-        # 2. Audio Generation via Edge-TTS
+        # 2. Audio Generation (Edge-TTS)
         text = script.strip() if (script and script.strip()) else "வணக்கம்"
         if user_audio:
             with open(audio_path, "wb") as f:
@@ -77,64 +72,33 @@ async def generate_video(
             tts_cmd = f'edge-tts --voice {voice} --text "{clean_text}" --write-media "{audio_path}"'
             subprocess.run(tts_cmd, shell=True, check=True)
 
-        # 3. Dynamic Scene Background with strict 5s timeout
-        bg_query = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)[:60].strip()
-        if not bg_query:
-            bg_query = "cinematic nature digital art"
-        encoded = urllib.parse.quote(f"{bg_query}, 4k scenery")
-        poll_url = f"https://image.pollinations.ai/prompt/{encoded}?width=540&height=960&nologo=true"
+        # 3. Standard Mobile Dimensions (480x854 uses 70% less RAM than 1080p)
+        w, h = (480, 854) if aspect_ratio == "9:16" else (854, 480)
 
-        has_bg = False
-        try:
-            r = requests.get(poll_url, timeout=5)
-            if r.status_code == 200 and len(r.content) > 2000:
-                with open(bg_path, "wb") as f:
-                    f.write(r.content)
-                has_bg = True
-        except Exception:
-            has_bg = False
-
-        w, h = (720, 1280) if aspect_ratio == "9:16" else (1280, 720)
-
-        # 4. Instant Ultrafast FFmpeg Encoding (Under 5 seconds)
-        if has_bg:
-            # Composite background with avatar in lower right
-            cmd = [
-                FFMPEG_EXE, "-y",
-                "-loop", "1", "-i", bg_path,
-                "-loop", "1", "-i", avatar_path,
-                "-i", audio_path,
-                "-filter_complex",
-                f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[bg];"
-                f"[1:v]scale=240:240[av];"
-                f"[bg][av]overlay=W-w-30:H-h-50",
-                "-c:v", "libx264",
-                "-tune", "stillimage",
-                "-preset", "ultrafast",
-                "-c:a", "aac",
-                "-b:a", "96k",
-                "-shortest",
-                final_video_path
-            ]
-        else:
-            # Full-frame avatar centered
-            cmd = [
-                FFMPEG_EXE, "-y",
-                "-loop", "1", "-i", avatar_path,
-                "-i", audio_path,
-                "-vf", f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},format=yuv420p",
-                "-c:v", "libx264",
-                "-tune", "stillimage",
-                "-preset", "ultrafast",
-                "-c:a", "aac",
-                "-b:a", "96k",
-                "-shortest",
-                final_video_path
-            ]
-
+        # 4. Ultra Low-Memory FFmpeg Pipeline
+        cmd = [
+            FFMPEG_EXE, "-y",
+            "-loop", "1",
+            "-framerate", "1",
+            "-i", avatar_path,
+            "-i", audio_path,
+            "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p",
+            "-c:v", "libx264",
+            "-tune", "stillimage",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-c:a", "aac",
+            "-b:a", "64k",
+            "-movflags", "+faststart",
+            "-shortest",
+            final_video_path
+        ]
         subprocess.run(cmd, check=True)
+
+        # Clean memory immediately
+        gc.collect()
+
         return FileResponse(final_video_path, media_type="video/mp4", filename="ai_video.mp4")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-                
