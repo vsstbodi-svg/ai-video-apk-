@@ -26,6 +26,7 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
   String _voice = "ta-IN-PallaviNeural";
   String? _selectedStockUrl;
   File? _galleryImage;
+  File? _savedVideoFile;
   bool _isLoading = false;
 
   VideoPlayerController? _videoController;
@@ -71,6 +72,8 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
         final file = File('${dir.path}/generated_video.mp4');
         await file.writeAsBytes(response.bodyBytes);
 
+        _savedVideoFile = file;
+
         _videoController?.dispose();
         _chewieController?.dispose();
 
@@ -92,6 +95,30 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed: $e")));
     } finally {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _downloadToPhone() async {
+    if (_savedVideoFile == null) return;
+    try {
+      final downloadDir = Directory('/storage/emulated/0/Download');
+      final fileName = 'AI_Video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final targetFile = File('${downloadDir.path}/$fileName');
+
+      await _savedVideoFile!.copy(targetFile.path);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Saved to Downloads: $fileName"),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Save failed: $e")),
+      );
     }
   }
 
@@ -200,13 +227,29 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
               ),
             ),
             const SizedBox(height: 20),
-            if (_chewieController != null)
+            if (_chewieController != null) ...[
               Center(
                 child: AspectRatio(
                   aspectRatio: _aspectRatio == "9:16" ? 9 / 16 : 16 / 9,
                   child: Chewie(controller: _chewieController!),
                 ),
               ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: _downloadToPhone,
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                  icon: const Icon(Icons.download, color: Colors.white),
+                  label: const Text(
+                    "Download Video to Gallery / Storage",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 30),
+            ],
           ],
         ),
       ),
