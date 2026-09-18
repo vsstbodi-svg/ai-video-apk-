@@ -3,3 +3,4 @@ uvicorn
 python-multipart
 edge-tts
 requests
+imageio-ffmpeg
