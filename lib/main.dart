@@ -19,14 +19,14 @@ class VideoGeneratorScreen extends StatefulWidget {
 }
 
 class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
-  // Default updated to your active Render server
+  // Pre-filled with your permanent Render URL
   final TextEditingController _urlController =
       TextEditingController(text: "https://ai-video-apk.onrender.com");
   final TextEditingController _scriptController = TextEditingController();
 
   String _aspectRatio = "9:16";
   String _selectedVoice = "ta-IN-PallaviNeural";
-  String _avatarSource = "Cartoons"; // "Cartoons", "AI Prompt", "Gallery"
+  String _avatarSource = "Cartoons"; // "Cartoons" or "Gallery"
   int _selectedCartoonIndex = 0;
   File? _galleryImage;
 
@@ -44,8 +44,10 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
   final Map<String, String> _voices = {
     "Tamil (Female - Pallavi)": "ta-IN-PallaviNeural",
     "Tamil (Male - Valluvar)": "ta-IN-ValluvarNeural",
-    "English (Female - Jenny)": "en-US-JennyNeural",
-    "English (Male - Guy)": "en-US-GuyNeural"
+    "Indian English / Bilingual (Female - Neerja)": "en-IN-NeerjaNeural",
+    "Indian English / Bilingual (Male - Prabhat)": "en-IN-PrabhatNeural",
+    "English (US Female - Jenny)": "en-US-JennyNeural",
+    "English (US Male - Guy)": "en-US-GuyNeural"
   };
 
   @override
@@ -82,7 +84,7 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
 
     setState(() {
       _isLoading = true;
-      _statusMsg = "Processing script & generating audio...";
+      _statusMsg = "Generating cinematic scenes, voice & lip-sync...";
       _videoPlayerController?.dispose();
       _videoPlayerController = null;
       _generatedVideoFile = null;
@@ -108,7 +110,7 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
         request.fields['stock_image_url'] = _stockAvatars[0];
       }
 
-      // Extended timeout to allow rendering longer scripts
+      // Extended 5-minute timeout for multi-scene rendering
       final streamedResponse = await request.send().timeout(const Duration(minutes: 5));
       final response = await http.Response.fromStream(streamedResponse);
 
@@ -136,7 +138,7 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _statusMsg = "Failed: $e";
+        _statusMsg = "Generation failed: $e";
       });
     }
   }
@@ -181,7 +183,7 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
                 isDense: true,
               ),
             ),
-            const Divider(height: 32),
+            const Divider(height: 28),
 
             const Text("1. Select Format", style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
@@ -204,12 +206,13 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
                 ),
               ],
             ),
-            const Divider(height: 32),
+            const Divider(height: 28),
 
             const Text("2. Voice & Script", style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               value: _selectedVoice,
+              isExpanded: true,
               items: _voices.entries
                   .map((e) => DropdownMenuItem(value: e.value, child: Text(e.key)))
                   .toList(),
@@ -219,13 +222,13 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: _scriptController,
-              maxLines: 3,
+              maxLines: 4,
               decoration: const InputDecoration(
-                hintText: "Enter your script here...",
+                hintText: "Enter your story or ad script (Tamil / English)...",
                 border: OutlineInputBorder(),
               ),
             ),
-            const Divider(height: 32),
+            const Divider(height: 28),
 
             const Text("3. Avatar Source", style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
@@ -265,12 +268,15 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
                   ElevatedButton.icon(
                     onPressed: _pickGalleryImage,
                     icon: const Icon(Icons.image),
-                    label: const Text("Select Avatar From Gallery"),
+                    label: const Text("Select Face Photo From Gallery"),
                   ),
                   if (_galleryImage != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 8.0),
-                      child: Image.file(_galleryImage!, height: 100),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.file(_galleryImage!, height: 100),
+                      ),
                     )
                 ],
               ),
@@ -287,9 +293,13 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
                   ? const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        ),
                         SizedBox(width: 12),
-                        Text("Rendering Video..."),
+                        Text("Creating Scenes & Rendering..."),
                       ],
                     )
                   : const Text("Generate Video", style: TextStyle(fontSize: 16)),
@@ -298,17 +308,24 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
             if (_statusMsg.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 12.0),
-                child: Text(_statusMsg, style: const TextStyle(fontWeight: FontWeight.bold)),
+                child: Text(
+                  _statusMsg,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
               ),
 
-            // Video Preview & Action Buttons
+            // Video Preview, Download & Reset Controls
             if (_videoPlayerController != null && _videoPlayerController!.value.isInitialized) ...[
               const Divider(height: 32),
               AspectRatio(
                 aspectRatio: _videoPlayerController!.value.aspectRatio,
-                child: VideoPlayer(_videoPlayerController!),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: VideoPlayer(_videoPlayerController!),
+                ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               Row(
                 children: [
                   Expanded(
@@ -316,7 +333,11 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
                       onPressed: _saveToDownloads,
                       icon: const Icon(Icons.download),
                       label: const Text("Download"),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -325,12 +346,15 @@ class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
                       onPressed: _resetForNextVideo,
                       icon: const Icon(Icons.add),
                       label: const Text("Create Another"),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
                 ],
               ),
             ],
-            const SizedBox(height: 40),
+            const SizedBox(height: 36),
           ],
         ),
       ),
