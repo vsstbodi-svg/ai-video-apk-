@@ -16,8 +16,9 @@ class VideoMakerApp extends StatefulWidget {
 }
 
 class _VideoMakerAppState extends State<VideoMakerApp> {
-  final String serverUrl = "https://weak-turtles-repair.loca.lt/generate";
-
+  final TextEditingController _urlController = TextEditingController(
+    text: "https://alerts-surveillance-strips-simple.trycloudflare.com",
+  );
   final TextEditingController _scriptController = TextEditingController();
   final TextEditingController _aiPromptController = TextEditingController();
 
@@ -48,7 +49,11 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
   Future<void> _generateVideo() async {
     setState(() => _isLoading = true);
     try {
-      var request = http.MultipartRequest("POST", Uri.parse(serverUrl));
+      String base = _urlController.text.trim();
+      if (base.endsWith("/")) base = base.substring(0, base.length - 1);
+      final endpoint = "$base/generate";
+
+      var request = http.MultipartRequest("POST", Uri.parse(endpoint));
       request.headers['bypass-tunnel-reminder'] = 'true';
 
       request.fields['aspect_ratio'] = _aspectRatio;
@@ -131,6 +136,15 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const Text("Server URL", style: TextStyle(fontWeight: FontWeight.bold)),
+            TextField(
+              controller: _urlController,
+              decoration: const InputDecoration(
+                hintText: "Enter Cloudflare or Localtunnel URL",
+                isDense: true,
+              ),
+            ),
+            const Divider(height: 24),
             const Text("1. Select Format", style: TextStyle(fontWeight: FontWeight.bold)),
             Row(
               children: [
@@ -147,7 +161,7 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
                 ),
               ],
             ),
-            const Divider(height: 28),
+            const Divider(height: 24),
             const Text("2. Voice & Script", style: TextStyle(fontWeight: FontWeight.bold)),
             DropdownButton<String>(
               value: _voice,
@@ -161,10 +175,10 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
             ),
             TextField(
               controller: _scriptController,
-              decoration: const InputDecoration(hintText: "Enter Tamil or English script..."),
+              decoration: const InputDecoration(hintText: "Enter script..."),
               maxLines: 2,
             ),
-            const Divider(height: 28),
+            const Divider(height: 24),
             const Text("3. Avatar Source", style: TextStyle(fontWeight: FontWeight.bold)),
             SegmentedButton<String>(
               segments: const [
@@ -200,7 +214,7 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
             else if (_imageMode == "ai_image")
               TextField(
                 controller: _aiPromptController,
-                decoration: const InputDecoration(labelText: "AI Prompt (e.g. 3D cute cartoon boy)"),
+                decoration: const InputDecoration(labelText: "AI Prompt"),
               )
             else
               ElevatedButton.icon(
@@ -243,7 +257,7 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                   icon: const Icon(Icons.download, color: Colors.white),
                   label: const Text(
-                    "Download Video to Gallery / Storage",
+                    "Download Video to Storage",
                     style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                 ),
