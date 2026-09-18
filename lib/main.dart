@@ -2,127 +2,160 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:chewie/chewie.dart';
 import 'package:video_player/video_player.dart';
 
-void main() => runApp(const MaterialApp(home: VideoMakerApp()));
-
-class VideoMakerApp extends StatefulWidget {
-  const VideoMakerApp({Key? key}) : super(key: key);
-
-  @override
-  State<VideoMakerApp> createState() => _VideoMakerAppState();
+void main() {
+  runApp(const MaterialApp(
+    home: VideoGeneratorScreen(),
+    debugShowCheckedModeBanner: false,
+  ));
 }
 
-class _VideoMakerAppState extends State<VideoMakerApp> {
-  final TextEditingController _urlController = TextEditingController(
-    text: "https://alerts-surveillance-strips-simple.trycloudflare.com",
-  );
+class VideoGeneratorScreen extends StatefulWidget {
+  const VideoGeneratorScreen({super.key});
+
+  @override
+  State<VideoGeneratorScreen> createState() => _VideoGeneratorScreenState();
+}
+
+class _VideoGeneratorScreenState extends State<VideoGeneratorScreen> {
+  // Default updated to your active Render server
+  final TextEditingController _urlController =
+      TextEditingController(text: "https://ai-video-apk.onrender.com");
   final TextEditingController _scriptController = TextEditingController();
-  final TextEditingController _aiPromptController = TextEditingController();
 
   String _aspectRatio = "9:16";
-  String _imageMode = "stock_cartoon";
-  String _voice = "ta-IN-PallaviNeural";
-  String? _selectedStockUrl;
+  String _selectedVoice = "ta-IN-PallaviNeural";
+  String _avatarSource = "Cartoons"; // "Cartoons", "AI Prompt", "Gallery"
+  int _selectedCartoonIndex = 0;
   File? _galleryImage;
-  File? _savedVideoFile;
+
   bool _isLoading = false;
+  String _statusMsg = "";
+  File? _generatedVideoFile;
+  VideoPlayerController? _videoPlayerController;
 
-  VideoPlayerController? _videoController;
-  ChewieController? _chewieController;
-
-  final List<String> _cartoons = [
-    "https://cdn.pixabay.com/photo/2021/01/04/06/20/man-5886570_1280.png",
+  final List<String> _stockAvatars = [
     "https://cdn.pixabay.com/photo/2016/08/20/05/38/avatar-1606916_1280.png",
-    "https://cdn.pixabay.com/photo/2020/05/17/20/21/cat-5183427_1280.png"
+    "https://cdn.pixabay.com/photo/2014/04/03/10/32/businessman-310819_1280.png",
+    "https://cdn.pixabay.com/photo/2017/01/31/19/07/avatar-2026510_1280.png"
   ];
 
+  final Map<String, String> _voices = {
+    "Tamil (Female - Pallavi)": "ta-IN-PallaviNeural",
+    "Tamil (Male - Valluvar)": "ta-IN-ValluvarNeural",
+    "English (Female - Jenny)": "en-US-JennyNeural",
+    "English (Male - Guy)": "en-US-GuyNeural"
+  };
+
+  @override
+  void dispose() {
+    _videoPlayerController?.dispose();
+    _urlController.dispose();
+    _scriptController.dispose();
+    super.dispose();
+  }
+
+  void _resetForNextVideo() {
+    setState(() {
+      _videoPlayerController?.pause();
+      _videoPlayerController?.dispose();
+      _videoPlayerController = null;
+      _generatedVideoFile = null;
+      _statusMsg = "";
+    });
+  }
+
   Future<void> _pickGalleryImage() async {
-    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
     if (picked != null) {
       setState(() => _galleryImage = File(picked.path));
     }
   }
 
   Future<void> _generateVideo() async {
-    setState(() => _isLoading = true);
-    try {
-      String base = _urlController.text.trim();
-      if (base.endsWith("/")) base = base.substring(0, base.length - 1);
-      final endpoint = "$base/generate";
+    if (_urlController.text.trim().isEmpty) {
+      setState(() => _statusMsg = "Please enter a Server URL.");
+      return;
+    }
 
-      var request = http.MultipartRequest("POST", Uri.parse(endpoint));
-      request.headers['bypass-tunnel-reminder'] = 'true';
+    setState(() {
+      _isLoading = true;
+      _statusMsg = "Processing script & generating audio...";
+      _videoPlayerController?.dispose();
+      _videoPlayerController = null;
+      _generatedVideoFile = null;
+    });
+
+    try {
+      final baseUri = _urlController.text.trim().replaceAll(RegExp(r'/+$'), '');
+      final uri = Uri.parse("$baseUri/generate");
+      final request = http.MultipartRequest("POST", uri);
 
       request.fields['aspect_ratio'] = _aspectRatio;
-      request.fields['image_mode'] = _imageMode;
-      request.fields['voice'] = _voice;
-      request.fields['script'] = _scriptController.text;
+      request.fields['voice'] = _selectedVoice;
+      request.fields['script'] = _scriptController.text.trim();
 
-      if (_imageMode == "stock_cartoon" && _selectedStockUrl != null) {
-        request.fields['stock_image_url'] = _selectedStockUrl!;
-      } else if (_imageMode == "ai_image") {
-        request.fields['ai_prompt'] = _aiPromptController.text;
-      } else if (_imageMode == "upload" && _galleryImage != null) {
+      if (_avatarSource == "Cartoons") {
+        request.fields['image_mode'] = "stock_cartoon";
+        request.fields['stock_image_url'] = _stockAvatars[_selectedCartoonIndex];
+      } else if (_avatarSource == "Gallery" && _galleryImage != null) {
+        request.fields['image_mode'] = "upload";
         request.files.add(await http.MultipartFile.fromPath('user_image', _galleryImage!.path));
+      } else {
+        request.fields['image_mode'] = "stock_cartoon";
+        request.fields['stock_image_url'] = _stockAvatars[0];
       }
 
-      final streamedResponse = await request.send();
+      // Extended timeout to allow rendering longer scripts
+      final streamedResponse = await request.send().timeout(const Duration(minutes: 5));
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
-        final dir = await getTemporaryDirectory();
-        final file = File('${dir.path}/generated_video.mp4');
+        final tempDir = Directory.systemTemp;
+        final file = File("${tempDir.path}/video_${DateTime.now().millisecondsSinceEpoch}.mp4");
         await file.writeAsBytes(response.bodyBytes);
 
-        _savedVideoFile = file;
-
-        _videoController?.dispose();
-        _chewieController?.dispose();
-
-        _videoController = VideoPlayerController.file(file);
-        await _videoController!.initialize();
+        _videoPlayerController = VideoPlayerController.file(file);
+        await _videoPlayerController!.initialize();
+        _videoPlayerController!.setLooping(true);
+        _videoPlayerController!.play();
 
         setState(() {
-          _chewieController = ChewieController(
-            videoPlayerController: _videoController!,
-            autoPlay: true,
-            looping: true,
-            aspectRatio: _aspectRatio == "9:16" ? 9 / 16 : 16 / 9,
-          );
+          _generatedVideoFile = file;
+          _isLoading = false;
+          _statusMsg = "Video generated successfully!";
         });
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: ${response.body}")));
+        setState(() {
+          _isLoading = false;
+          _statusMsg = "Server error: ${response.statusCode}\n${response.body}";
+        });
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed: $e")));
-    } finally {
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _statusMsg = "Failed: $e";
+      });
     }
   }
 
-  Future<void> _downloadToPhone() async {
-    if (_savedVideoFile == null) return;
+  Future<void> _saveToDownloads() async {
+    if (_generatedVideoFile == null) return;
     try {
-      final downloadDir = Directory('/storage/emulated/0/Download');
-      final fileName = 'AI_Video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final targetFile = File('${downloadDir.path}/$fileName');
-
-      await _savedVideoFile!.copy(targetFile.path);
-
-      if (!mounted) return;
+      final extDir = Directory('/storage/emulated/0/Download');
+      if (!await extDir.exists()) {
+        await extDir.create(recursive: true);
+      }
+      final savePath = "${extDir.path}/ai_video_${DateTime.now().millisecondsSinceEpoch}.mp4";
+      await _generatedVideoFile!.copy(savePath);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Saved to Downloads: $fileName"),
-          backgroundColor: Colors.green,
-        ),
+        SnackBar(content: Text("Saved to Downloads: $savePath")),
       );
     } catch (e) {
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Save failed: $e")),
+        SnackBar(content: Text("Download error: $e")),
       );
     }
   }
@@ -130,140 +163,174 @@ class _VideoMakerAppState extends State<VideoMakerApp> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("AI Video Generator")),
+      appBar: AppBar(
+        title: const Text("AI Video Generator"),
+        backgroundColor: Colors.deepPurple,
+      ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text("Server URL", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
             TextField(
               controller: _urlController,
               decoration: const InputDecoration(
-                hintText: "Enter Cloudflare or Localtunnel URL",
+                border: OutlineInputBorder(),
                 isDense: true,
               ),
             ),
-            const Divider(height: 24),
+            const Divider(height: 32),
+
             const Text("1. Select Format", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
             Row(
               children: [
-                ChoiceChip(
-                  label: const Text("9:16 (Vertical)"),
-                  selected: _aspectRatio == "9:16",
-                  onSelected: (_) => setState(() => _aspectRatio = "9:16"),
+                Expanded(
+                  child: ChoiceChip(
+                    label: const Center(child: Text("9:16 (Vertical)")),
+                    selected: _aspectRatio == "9:16",
+                    onSelected: (val) => setState(() => _aspectRatio = "9:16"),
+                  ),
                 ),
-                const SizedBox(width: 8),
-                ChoiceChip(
-                  label: const Text("16:9 (Landscape)"),
-                  selected: _aspectRatio == "16:9",
-                  onSelected: (_) => setState(() => _aspectRatio = "16:9"),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ChoiceChip(
+                    label: const Center(child: Text("16:9 (Landscape)")),
+                    selected: _aspectRatio == "16:9",
+                    onSelected: (val) => setState(() => _aspectRatio = "16:9"),
+                  ),
                 ),
               ],
             ),
-            const Divider(height: 24),
+            const Divider(height: 32),
+
             const Text("2. Voice & Script", style: TextStyle(fontWeight: FontWeight.bold)),
-            DropdownButton<String>(
-              value: _voice,
-              isExpanded: true,
-              items: const [
-                DropdownMenuItem(value: "ta-IN-PallaviNeural", child: Text("Tamil (Female - Pallavi)")),
-                DropdownMenuItem(value: "ta-IN-ValluvarNeural", child: Text("Tamil (Male - Valluvar)")),
-                DropdownMenuItem(value: "en-IN-NeerjaNeural", child: Text("Indian English / Tanglish")),
-              ],
-              onChanged: (v) => setState(() => _voice = v!),
-            ),
-            TextField(
-              controller: _scriptController,
-              decoration: const InputDecoration(hintText: "Enter script..."),
-              maxLines: 2,
-            ),
-            const Divider(height: 24),
-            const Text("3. Avatar Source", style: TextStyle(fontWeight: FontWeight.bold)),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: "stock_cartoon", label: Text("Cartoons")),
-                ButtonSegment(value: "ai_image", label: Text("AI Prompt")),
-                ButtonSegment(value: "upload", label: Text("Gallery")),
-              ],
-              selected: {_imageMode},
-              onSelectionChanged: (set) => setState(() => _imageMode = set.first),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: _selectedVoice,
+              items: _voices.entries
+                  .map((e) => DropdownMenuItem(value: e.value, child: Text(e.key)))
+                  .toList(),
+              onChanged: (val) => setState(() => _selectedVoice = val!),
+              decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true),
             ),
             const SizedBox(height: 12),
-            if (_imageMode == "stock_cartoon")
-              SizedBox(
-                height: 80,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _cartoons.length,
-                  itemBuilder: (ctx, i) => GestureDetector(
-                    onTap: () => setState(() => _selectedStockUrl = _cartoons[i]),
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: _selectedStockUrl == _cartoons[i] ? Colors.blue : Colors.grey,
-                          width: 3,
-                        ),
-                      ),
-                      child: Image.network(_cartoons[i], width: 70, fit: BoxFit.cover),
-                    ),
-                  ),
-                ),
-              )
-            else if (_imageMode == "ai_image")
-              TextField(
-                controller: _aiPromptController,
-                decoration: const InputDecoration(labelText: "AI Prompt"),
-              )
-            else
-              ElevatedButton.icon(
-                onPressed: _pickGalleryImage,
-                icon: const Icon(Icons.image),
-                label: Text(_galleryImage == null ? "Pick Photo" : "Photo Selected"),
-              ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _generateVideo,
-                child: _isLoading
-                    ? const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(color: Colors.white),
-                          SizedBox(width: 12),
-                          Text("Generating video..."),
-                        ],
-                      )
-                    : const Text("Generate AI Video"),
+            TextField(
+              controller: _scriptController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                hintText: "Enter your script here...",
+                border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 20),
-            if (_chewieController != null) ...[
-              Center(
-                child: AspectRatio(
-                  aspectRatio: _aspectRatio == "9:16" ? 9 / 16 : 16 / 9,
-                  child: Chewie(controller: _chewieController!),
-                ),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: _downloadToPhone,
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                  icon: const Icon(Icons.download, color: Colors.white),
-                  label: const Text(
-                    "Download Video to Storage",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            const Divider(height: 32),
+
+            const Text("3. Avatar Source", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: "Cartoons", label: Text("Cartoons")),
+                ButtonSegment(value: "Gallery", label: Text("Gallery")),
+              ],
+              selected: {_avatarSource},
+              onSelectionChanged: (newSet) => setState(() => _avatarSource = newSet.first),
+            ),
+            const SizedBox(height: 12),
+
+            if (_avatarSource == "Cartoons")
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: List.generate(_stockAvatars.length, (index) {
+                  return GestureDetector(
+                    onTap: () => setState(() => _selectedCartoonIndex = index),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: _selectedCartoonIndex == index ? Colors.deepPurple : Colors.grey,
+                          width: 3,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Image.network(_stockAvatars[index], width: 70, height: 70, fit: BoxFit.cover),
+                    ),
+                  );
+                }),
+              )
+            else
+              Column(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _pickGalleryImage,
+                    icon: const Icon(Icons.image),
+                    label: const Text("Select Avatar From Gallery"),
                   ),
-                ),
+                  if (_galleryImage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Image.file(_galleryImage!, height: 100),
+                    )
+                ],
               ),
-              const SizedBox(height: 30),
+
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _isLoading ? null : _generateVideo,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                backgroundColor: Colors.deepPurple,
+                foregroundColor: Colors.white,
+              ),
+              child: _isLoading
+                  ? const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                        SizedBox(width: 12),
+                        Text("Rendering Video..."),
+                      ],
+                    )
+                  : const Text("Generate Video", style: TextStyle(fontSize: 16)),
+            ),
+
+            if (_statusMsg.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12.0),
+                child: Text(_statusMsg, style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
+
+            // Video Preview & Action Buttons
+            if (_videoPlayerController != null && _videoPlayerController!.value.isInitialized) ...[
+              const Divider(height: 32),
+              AspectRatio(
+                aspectRatio: _videoPlayerController!.value.aspectRatio,
+                child: VideoPlayer(_videoPlayerController!),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _saveToDownloads,
+                      icon: const Icon(Icons.download),
+                      label: const Text("Download"),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _resetForNextVideo,
+                      icon: const Icon(Icons.add),
+                      label: const Text("Create Another"),
+                    ),
+                  ),
+                ],
+              ),
             ],
+            const SizedBox(height: 40),
           ],
         ),
       ),
